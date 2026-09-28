@@ -122,7 +122,81 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
 
   // Fullscreen & map view mode state
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [mapMode, setMapMode] = useState<"radar" | "osm" | "google">("radar");
+  const [mapMode, setMapMode] = useState<"radar" | "osm" | "google" | "leaflet">("leaflet");
+
+  // Leaflet JS container and instance ref
+  const leafletContainerRef = useRef<HTMLDivElement>(null);
+  const leafletInstanceRef = useRef<any>(null);
+
+  useEffect(() => {
+    if ((mapMode === "leaflet" || mapMode === "osm") && leafletContainerRef.current) {
+      const L = (window as any).L;
+      if (!L) return;
+
+      if (leafletInstanceRef.current) {
+        leafletInstanceRef.current.remove();
+        leafletInstanceRef.current = null;
+      }
+
+      // Initialize Leaflet map instance
+      const map = L.map(leafletContainerRef.current).setView([11.0168, 76.9558], 13);
+
+      // OpenStreetMap Tile Layer
+      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+      }).addTo(map);
+
+      // Start Marker (Gandhipuram)
+      L.marker([11.0168, 76.9558]).addTo(map)
+        .bindPopup('<b>📍 Gandhipuram Central</b><br>Trip Origin Point')
+        .openPopup();
+
+      // Destination Marker (Saravanampatti)
+      L.marker([11.0801, 76.9949]).addTo(map)
+        .bindPopup('<b>🏁 Saravanampatti Tech Zone</b><br>Trip Destination');
+
+      // Active Route Polyline
+      L.polyline([
+        [11.0168, 76.9558],
+        [11.0310, 76.9630],
+        [11.0450, 76.9720],
+        [11.0620, 76.9840],
+        [11.0801, 76.9949]
+      ], {
+        color: '#3b82f6',
+        weight: 6,
+        opacity: 0.85,
+        lineCap: 'round'
+      }).addTo(map);
+
+      // Live Traffic Alert Markers on Leaflet map
+      alerts.forEach((alert) => {
+        const lat = 11.0168 + (300 - alert.coordinates.y) * 0.0003;
+        const lng = 76.9558 + (alert.coordinates.x - 300) * 0.0003;
+        const color = alert.type === 'accident' ? '#ef4444' : alert.type === 'construction' ? '#f97316' : '#eab308';
+
+        L.circleMarker([lat, lng], {
+          radius: 9,
+          fillColor: color,
+          color: '#ffffff',
+          weight: 2,
+          opacity: 1,
+          fillOpacity: 0.9
+        }).addTo(map)
+          .bindPopup(`<b>⚠️ ${alert.title}</b><br>${alert.description}<br><small style="color: #64748b;">Severity: ${alert.severity}</small>`);
+      });
+
+      leafletInstanceRef.current = map;
+
+      return () => {
+        if (leafletInstanceRef.current) {
+          leafletInstanceRef.current.remove();
+          leafletInstanceRef.current = null;
+        }
+      };
+    }
+  }, [mapMode, alerts, selectedRouteId]);
 
 
   // Place search and highlighting
@@ -376,19 +450,29 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
             </a>
           </div>
         </div>
-      ) : mapMode === "osm" ? (
+      ) : mapMode === "leaflet" || mapMode === "osm" ? (
         <div className="relative w-full h-full bg-slate-950">
-          <iframe
-            title="OpenStreetMap Coimbatore Metro Area"
-            className="w-full h-full border-0 filter contrast-125"
-            src="https://www.openstreetmap.org/export/embed.html?bbox=76.8400%2C10.9200%2C77.0900%2C11.1300&layer=mapnik"
-          />
-          <div className="absolute bottom-20 left-4 z-10 bg-slate-900/90 backdrop-blur-md px-3 py-2 rounded-xl border border-slate-700 text-xs text-slate-200 flex items-center gap-2 shadow-2xl pointer-events-auto">
-            <Globe className="w-4 h-4 text-emerald-400 shrink-0" />
-            <div>
-              <div className="font-bold text-white">OpenStreetMap Live Full Network</div>
-              <div className="text-[10px] text-slate-400">Coimbatore Metro • Pan & zoom real-world road grid</div>
+          <div ref={leafletContainerRef} id="leaflet-map" className="w-full h-full z-0 min-h-[450px]" />
+          <div className="absolute bottom-20 left-4 z-10 bg-slate-900/90 backdrop-blur-md px-3.5 py-2.5 rounded-xl border border-emerald-500/40 text-xs text-slate-200 flex items-center justify-between gap-4 shadow-2xl pointer-events-auto">
+            <div className="flex items-center gap-2">
+              <Globe className="w-4 h-4 text-emerald-400 shrink-0" />
+              <div>
+                <div className="font-bold text-white flex items-center gap-1.5">
+                  LeafletJS Interactive Map Engine
+                </div>
+                <div className="text-[10px] text-slate-400">Powered by OpenStreetMap tile layers & custom popups</div>
+              </div>
             </div>
+            <button
+              onClick={() => {
+                if (leafletInstanceRef.current) {
+                  leafletInstanceRef.current.setView([11.0168, 76.9558], 13);
+                }
+              }}
+              className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] shadow transition-all shrink-0"
+            >
+              Reset View
+            </button>
           </div>
         </div>
       ) : (
@@ -1134,6 +1218,15 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
             {/* Mode Switcher */}
             <div className="flex items-center border-l border-slate-700/80 pl-2 pr-1 gap-1 shrink-0">
               <button
+                onClick={() => setMapMode("leaflet")}
+                className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all ${
+                  mapMode === "leaflet" ? "bg-emerald-600 text-white shadow-md shadow-emerald-600/30" : "bg-slate-800 text-slate-400 hover:bg-slate-700"
+                }`}
+                title="LeafletJS Interactive Map Engine"
+              >
+                🍃 Leaflet JS
+              </button>
+              <button
                 onClick={() => setMapMode("radar")}
                 className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all ${
                   mapMode === "radar" ? "bg-blue-600 text-white" : "bg-slate-800 text-slate-400 hover:bg-slate-700"
@@ -1150,15 +1243,6 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
                 title="Google Maps Live Embed View"
               >
                 🗺️ Google Maps
-              </button>
-              <button
-                onClick={() => setMapMode("osm")}
-                className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all ${
-                  mapMode === "osm" ? "bg-emerald-600 text-white" : "bg-slate-800 text-slate-400 hover:bg-slate-700"
-                }`}
-                title="OpenStreetMap Grid"
-              >
-                🌐 OSM
               </button>
 
               <a
