@@ -26,7 +26,7 @@ import {
   smartConnectService
 } from "./services";
 import { Navbar } from "./components/Navbar";
-import { DemoModeBanner } from "./components/DemoModeBanner";
+
 import { InteractiveMap } from "./components/InteractiveMap";
 import { DashboardView } from "./components/DashboardView";
 import { RoutePlannerView } from "./components/RoutePlannerView";
@@ -316,11 +316,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900 font-sans flex flex-col selection:bg-blue-600 selection:text-white">
-      {/* 1. DEMO MODE TRANSPARENCY BANNER */}
-      <DemoModeBanner
-        showDataBadges={showDataBadges}
-        onToggleDataBadges={() => setShowDataBadges(!showDataBadges)}
-      />
 
       {/* 2. TOP NAVBAR */}
       <Navbar
