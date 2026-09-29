@@ -170,11 +170,30 @@ export const RoutePlannerView: React.FC<RoutePlannerViewProps> = ({
     setCalcError(null);
   };
 
+  /**
+   * Resolves a waypoint to a WorldwideLocation.
+   * Tries the full label first, then progressively shorter fallback queries
+   * (e.g. "Saravanampatti Tech Zone" → "Saravanampatti" → first word).
+   */
   const resolveWaypoint = async (wp: Waypoint): Promise<WorldwideLocation | null> => {
     if (wp.resolvedLoc) return wp.resolvedLoc;
-    if (!wp.label.trim()) return null;
-    const results = await worldRoutingService.searchWorldwideLocations(wp.label);
-    return results[0] || null;
+    const raw = wp.label.trim();
+    if (!raw) return null;
+
+    // Build a list of progressively simpler query variants to try
+    const words = raw.split(/\s+/);
+    const queries: string[] = [
+      raw,                                          // full label
+      words.slice(0, 3).join(" "),                  // first 3 words
+      words.slice(0, 2).join(" "),                  // first 2 words
+      words[0],                                     // first word only
+    ].filter((q, i, arr) => q.length >= 2 && arr.indexOf(q) === i); // dedupe & min length
+
+    for (const q of queries) {
+      const results = await worldRoutingService.searchWorldwideLocations(q);
+      if (results.length > 0) return results[0];
+    }
+    return null;
   };
 
   const handleCalculate = async () => {
@@ -187,14 +206,31 @@ export const RoutePlannerView: React.FC<RoutePlannerViewProps> = ({
     setCalcError(null);
     try {
       const resolvedStops = await Promise.all(validWps.map(resolveWaypoint));
-      const stops = resolvedStops
-        .map((loc, i) =>
-          loc ? { name: loc.shortName || validWps[i].label, lat: loc.lat, lng: loc.lng } : null
-        )
-        .filter((s): s is { name: string; lat: number; lng: number } => s !== null);
+
+      // Find any stop that failed geocoding and report it specifically
+      const failedIndex = resolvedStops.findIndex((loc) => loc === null);
+      if (failedIndex !== -1) {
+        const failedLabel = validWps[failedIndex].label;
+        const role =
+          failedIndex === 0
+            ? "origin"
+            : failedIndex === validWps.length - 1
+            ? "destination"
+            : `stop ${failedIndex}`;
+        setCalcError(
+          `Couldn't find "${failedLabel}" on the map (${role}). Try a city name or landmark instead.`
+        );
+        return;
+      }
+
+      const stops = (resolvedStops as WorldwideLocation[]).map((loc, i) => ({
+        name: loc.shortName || validWps[i].label,
+        lat: loc.lat,
+        lng: loc.lng,
+      }));
 
       if (stops.length < 2) {
-        setCalcError("Could not geocode enough locations. Please be more specific.");
+        setCalcError("Need at least 2 valid locations to calculate a route.");
         return;
       }
 
