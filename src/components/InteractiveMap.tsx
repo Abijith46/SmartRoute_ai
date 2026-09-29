@@ -128,63 +128,219 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
   const leafletContainerRef = useRef<HTMLDivElement>(null);
   const leafletInstanceRef = useRef<any>(null);
 
+
   useEffect(() => {
     if ((mapMode === "leaflet" || mapMode === "osm") && leafletContainerRef.current) {
       const L = (window as any).L;
       if (!L) return;
 
+      // Tear down previous instance
       if (leafletInstanceRef.current) {
         leafletInstanceRef.current.remove();
         leafletInstanceRef.current = null;
       }
 
-      // Initialize Leaflet map instance
-      const map = L.map(leafletContainerRef.current).setView([11.0168, 76.9558], 13);
+      // ── Initialise map ────────────────────────────────────────────────
+      const map = L.map(leafletContainerRef.current, {
+        zoomControl: false,
+        attributionControl: true,
+      }).setView([11.0168, 76.9558], 13);
 
-      // OpenStreetMap Tile Layer
-      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      // Zoom control — bottom right
+      L.control.zoom({ position: "bottomright" }).addTo(map);
+
+      // OpenStreetMap tile layer (standard)
+      L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
         maxZoom: 19,
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        attribution:
+          '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
       }).addTo(map);
 
-      // Start Marker (Gandhipuram)
-      L.marker([11.0168, 76.9558]).addTo(map)
-        .bindPopup('<b>📍 Gandhipuram Central</b><br>Trip Origin Point')
-        .openPopup();
+      // ── Helper: custom SVG DivIcon ─────────────────────────────────────
+      const makeIcon = (color: string, label: string, emoji: string) =>
+        L.divIcon({
+          className: "",
+          iconAnchor: [18, 36],
+          popupAnchor: [0, -36],
+          html: `
+            <div style="
+              display:flex;flex-direction:column;align-items:center;
+              filter: drop-shadow(0 2px 6px rgba(0,0,0,0.35));
+            ">
+              <div style="
+                background:${color};color:#fff;font-size:11px;font-weight:800;
+                padding:3px 8px;border-radius:20px;white-space:nowrap;
+                border:2px solid #fff;margin-bottom:2px;
+              ">${emoji} ${label}</div>
+              <div style="
+                width:0;height:0;border-left:7px solid transparent;
+                border-right:7px solid transparent;border-top:10px solid ${color};
+              "></div>
+            </div>`,
+        });
 
-      // Destination Marker (Saravanampatti)
-      L.marker([11.0801, 76.9949]).addTo(map)
-        .bindPopup('<b>🏁 Saravanampatti Tech Zone</b><br>Trip Destination');
+      // ── Congestion colour ──────────────────────────────────────────────
+      const congestionColor = (level: string) => {
+        switch (level) {
+          case "low":      return "#22c55e";
+          case "moderate": return "#f59e0b";
+          case "heavy":    return "#f97316";
+          case "severe":   return "#ef4444";
+          default:         return "#3b82f6";
+        }
+      };
 
-      // Active Route Polyline
-      L.polyline([
-        [11.0168, 76.9558],
-        [11.0310, 76.9630],
-        [11.0450, 76.9720],
-        [11.0620, 76.9840],
-        [11.0801, 76.9949]
-      ], {
-        color: '#3b82f6',
-        weight: 6,
-        opacity: 0.85,
-        lineCap: 'round'
-      }).addTo(map);
+      // ── Collect real OSRM geoCoordinates from segments ────────────────
+      const routeGeoPoints: [number, number][] = [];
+      if (activeRoute && activeRoute.segments) {
+        activeRoute.segments.forEach((seg) => {
+          if (seg.geoCoordinates && seg.geoCoordinates.length > 0) {
+            seg.geoCoordinates.forEach((pt) => routeGeoPoints.push(pt as [number, number]));
+          }
+        });
+      }
 
-      // Live Traffic Alert Markers on Leaflet map
+      const hasRealGeometry = routeGeoPoints.length >= 2;
+
+      // ── Draw route ────────────────────────────────────────────────────
+      if (hasRealGeometry) {
+        // Draw each segment with its congestion colour
+        if (activeRoute && activeRoute.segments) {
+          activeRoute.segments.forEach((seg) => {
+            if (!seg.geoCoordinates || seg.geoCoordinates.length < 2) return;
+            const color = congestionColor(seg.congestion);
+
+            // Outer glow
+            L.polyline(seg.geoCoordinates as [number, number][], {
+              color,
+              weight: 14,
+              opacity: 0.18,
+              lineCap: "round",
+              lineJoin: "round",
+            }).addTo(map);
+
+            // Main road line
+            const line = L.polyline(seg.geoCoordinates as [number, number][], {
+              color,
+              weight: 6,
+              opacity: 0.92,
+              lineCap: "round",
+              lineJoin: "round",
+            }).addTo(map);
+
+            // Direction arrows (white dashes)
+            L.polyline(seg.geoCoordinates as [number, number][], {
+              color: "#ffffff",
+              weight: 2,
+              opacity: 0.55,
+              dashArray: "8 14",
+              lineCap: "round",
+            }).addTo(map);
+
+            line.bindPopup(
+              `<b>${seg.name || "Road Segment"}</b><br>
+              Distance: <b>${seg.distanceKm} km</b> · ETA: <b>${seg.durationMin} min</b><br>
+              Traffic: <span style="color:${color};font-weight:700;text-transform:capitalize">${seg.congestion}</span>
+              ${seg.speedLimitKmh ? `· Limit: <b>${seg.speedLimitKmh} km/h</b>` : ""}
+              ${seg.streetName ? `<br><small style="color:#64748b">🛣️ ${seg.streetName}</small>` : ""}`
+            );
+          });
+        }
+
+        // ── Markers: origin ─────────────────────────────────────────────
+        const firstPt = routeGeoPoints[0];
+        const lastPt = routeGeoPoints[routeGeoPoints.length - 1];
+
+        L.marker(firstPt, {
+          icon: makeIcon("#2563eb", activeRoute.origin || "Origin", "📍"),
+        })
+          .addTo(map)
+          .bindPopup(
+            `<b>📍 ${activeRoute.origin || "Starting Point"}</b><br>
+            <small style="color:#64748b">Trip origin</small>`
+          );
+
+        // ── Markers: destination ────────────────────────────────────────
+        L.marker(lastPt, {
+          icon: makeIcon("#dc2626", activeRoute.destination || "Destination", "🏁"),
+        })
+          .addTo(map)
+          .bindPopup(
+            `<b>🏁 ${activeRoute.destination || "Destination"}</b><br>
+            <small style="color:#64748b">
+              Total: <b>${activeRoute.distanceKm} km</b> · ETA: <b>${activeRoute.durationMin} min</b>
+            </small>`
+          );
+
+        // ── Markers: intermediate waypoints (segment boundaries) ────────
+        if (activeRoute.segments && activeRoute.segments.length > 1) {
+          // Place a small waypoint dot at each leg junction
+          for (let i = 0; i < activeRoute.segments.length - 1; i++) {
+            const seg = activeRoute.segments[i];
+            if (seg.geoCoordinates && seg.geoCoordinates.length > 0) {
+              const pt = seg.geoCoordinates[seg.geoCoordinates.length - 1] as [number, number];
+              L.circleMarker(pt, {
+                radius: 7,
+                fillColor: "#f59e0b",
+                color: "#ffffff",
+                weight: 2.5,
+                fillOpacity: 1,
+              })
+                .addTo(map)
+                .bindPopup(
+                  `<b>🟡 Waypoint ${i + 1}</b><br>
+                  <small style="color:#64748b">${seg.name || "Junction"}</small>`
+                );
+            }
+          }
+        }
+
+        // ── Fit bounds to full route ─────────────────────────────────────
+        const bounds = L.latLngBounds(routeGeoPoints);
+        map.fitBounds(bounds, { padding: [48, 48], maxZoom: 16 });
+
+      } else {
+        // ── Fallback: default Coimbatore view with simple markers ────────
+        L.marker([11.0168, 76.9558], {
+          icon: makeIcon("#2563eb", "Gandhipuram", "📍"),
+        })
+          .addTo(map)
+          .bindPopup("<b>📍 Gandhipuram Central</b><br>Trip Origin")
+          .openPopup();
+
+        L.marker([11.0801, 76.9949], {
+          icon: makeIcon("#dc2626", "Saravanampatti", "🏁"),
+        })
+          .addTo(map)
+          .bindPopup("<b>🏁 Saravanampatti Tech Zone</b><br>Trip Destination");
+
+        // Approximate route as fallback until OSRM result loads
+        L.polyline(
+          [[11.0168, 76.9558],[11.0310, 76.9630],[11.0450, 76.9720],[11.0620, 76.9840],[11.0801, 76.9949]],
+          { color: "#3b82f6", weight: 6, opacity: 0.75, lineCap: "round", dashArray: "10 6" }
+        ).addTo(map).bindPopup("Calculate a route to see the real path →");
+      }
+
+      // ── Alert markers ─────────────────────────────────────────────────
       alerts.forEach((alert) => {
-        const lat = 11.0168 + (300 - alert.coordinates.y) * 0.0003;
-        const lng = 76.9558 + (alert.coordinates.x - 300) * 0.0003;
-        const color = alert.type === 'accident' ? '#ef4444' : alert.type === 'construction' ? '#f97316' : '#eab308';
+        // Use proper lat/lng if available, otherwise estimate from canvas coords
+        const lat = alert.coordinates.lat ?? (11.0168 + (300 - (alert.coordinates.y ?? 300)) * 0.0003);
+        const lng = alert.coordinates.lng ?? (76.9558 + ((alert.coordinates.x ?? 300) - 300) * 0.0003);
+        const color = alert.type === "accident" ? "#ef4444" : alert.type === "construction" ? "#f97316" : "#eab308";
 
         L.circleMarker([lat, lng], {
           radius: 9,
           fillColor: color,
-          color: '#ffffff',
+          color: "#ffffff",
           weight: 2,
           opacity: 1,
-          fillOpacity: 0.9
-        }).addTo(map)
-          .bindPopup(`<b>⚠️ ${alert.title}</b><br>${alert.description}<br><small style="color: #64748b;">Severity: ${alert.severity}</small>`);
+          fillOpacity: 0.9,
+        })
+          .addTo(map)
+          .bindPopup(
+            `<b>⚠️ ${alert.title}</b><br>${alert.description}<br>
+            <small style="color:#64748b">Severity: <b>${alert.severity}</b></small>`
+          );
       });
 
       leafletInstanceRef.current = map;
@@ -196,7 +352,9 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
         }
       };
     }
-  }, [mapMode, alerts, selectedRouteId]);
+  }, [mapMode, alerts, selectedRouteId, routes]);
+
+
 
 
   // Place search and highlighting
@@ -466,7 +624,21 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
             <button
               onClick={() => {
                 if (leafletInstanceRef.current) {
-                  leafletInstanceRef.current.setView([11.0168, 76.9558], 13);
+                  // Collect real geo points from the active route
+                  const pts: [number, number][] = [];
+                  if (activeRoute && activeRoute.segments) {
+                    activeRoute.segments.forEach((seg) => {
+                      if (seg.geoCoordinates) {
+                        seg.geoCoordinates.forEach((pt) => pts.push(pt as [number, number]));
+                      }
+                    });
+                  }
+                  if (pts.length >= 2) {
+                    const L = (window as any).L;
+                    leafletInstanceRef.current.fitBounds(L.latLngBounds(pts), { padding: [48, 48], maxZoom: 16 });
+                  } else {
+                    leafletInstanceRef.current.setView([11.0168, 76.9558], 13);
+                  }
                 }
               }}
               className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] shadow transition-all shrink-0"
